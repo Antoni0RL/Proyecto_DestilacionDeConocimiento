@@ -113,3 +113,42 @@ else:
 
 
 # Viendo que hay diferencia significativa haremos modelos con aumento de datos
+
+"""# CNN-1C"""
+
+# Transformar datos a escala de grises (1 Canal)
+conversor = transforms.Compose([
+    transforms.Grayscale(num_output_channels=1),
+    transforms.ToTensor()
+])
+
+#Carga de datos
+train_dataset = PathMNIST(split="train", transform=conversor, download=True)
+val_dataset = PathMNIST(split="val", transform=conversor, download=True)
+test_dataset = PathMNIST(split="test", transform=conversor, download=True)
+
+train_loader = DataLoader(train_dataset, batch_size=64 , shuffle=True)
+val_loader = DataLoader(val_dataset, batch_size=64 , shuffle=True)
+test_loader = DataLoader(test_dataset, batch_size=64 , shuffle=True)
+
+"""## Propuesta de arquitectura"""
+
+"""Modelo convoluciona1- 1 canal"""
+class CNN_1C(nn.Module):
+    def __init__(self):
+        super(CNN_1C).__init__()
+
+        self.conv1 = nn.Conv2d(1, 32, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
+        self.pool = nn.MaxPool2d(2,2)
+        self.fc1 = nn.Linear(64 * 7 * 7,128)
+        self.fc2 = nn.Linear(128, n_clases)
+
+    def forward(self, x):
+        x = self.pool(F.relu(self.conv1(x)))
+        x = self.pool(F.relu(self.conv2(x)))
+        x = x.view(-1, 64 * 7 * 7)
+        x = F.relu(self.fc1(x))
+        x = self.fc2(x)
+        return x
+
