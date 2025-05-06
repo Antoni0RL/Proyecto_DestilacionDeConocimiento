@@ -152,3 +152,92 @@ class CNN_1C(nn.Module):
         x = self.fc2(x)
         return x
 
+
+""## Ajuste de Hiperparametros"""
+
+# Función de entrenamiento
+def train_model(model, optimizer, criterion, train_loader, val_loader, device):
+    model.to(device)
+    for epoch in range(3):  # pocas épocas para pruebas rápidas
+        model.train()
+        for images, labels in train_loader:
+            images, labels = images.to(device), labels.squeeze().long().to(device)
+            optimizer.zero_grad()
+            outputs = model(images)
+            loss = criterion(outputs, labels)
+            loss.backward()
+            optimizer.step()
+
+    model.eval()
+    preds, targets = [], []
+    with torch.no_grad():
+        for images, labels in val_loader:
+            images = images.to(device)
+            outputs = model(images)
+            preds.extend(outputs.argmax(1).cpu().numpy())
+            targets.extend(labels.squeeze().numpy())
+
+    return accuracy_score(targets, preds)
+
+# Función objetivo para Optuna
+def objective(trial):
+    # 🔧 Hiperparámetros a optimizar
+    conv1_out = trial.suggest_categorical('conv1_out', [16, 32, 64])
+    conv2_out = trial.suggest_categorical('conv2_out', [32, 64, 128])
+    kernel_size = trial.suggest_categorical('kernel_size', [3, 5])
+    padding = trial.suggest_categorical('padding', [0, 1, 2])
+    fc1_out = trial.suggest_categorical('fc1_out', [64, 128, 256])
+    fc2_out = trial.suggest_categorical('fc2_out', [32, 64, 128])
+    dropout_rate = trial.suggest_float('dropout', 0.2, 0.5)
+    lr = trial.suggest_float('lr', 1e-4, 1e-2, log=True)
+    batch_size = trial.suggest_categorical('batch_size', [32, 64, 128])
+
+    # DataLoaders con batch size optimizado
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size)
+
+    # Modelo con todos los hiperparámetros variables
+    class TunedCNN(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.conv1 = nn.Conv2d(1, conv1_out, kernel_size, padding=padding)
+            self.conv2 = nn.Conv2d(conv1_out, conv2_out, kernel_size, padding=padding)
+            self.pool = nn.MaxPool2d(2, 2)
+            # Tamaño resultante tras 2 capas conv + 2 pooling (estimado para 28x28)
+            out_size = 28
+            out_size = (out_size + 2*padding - kernel_size) // 1 + 1
+            out_size = out_size // 2
+            out_size = (out_size + 2*padding - kernel_size) // 1 + 1
+            out_size = out_size // 2
+            self.flattened = conv2_out * out_size * out_size
+
+            self.fc1 = nn.Linear(self.flattened, fc1_out)
+            self.dropout = nn.Dropout(dropout_rate)
+            self.fc2 = nn.Linear(fc1_out, fc2_out)
+            self.out = nn.Linear(fc2_out, n_clases)
+
+        def forward(self, x):
+            x = self.pool(F.relu(self.conv1(x)))
+            x = self.pool(F.relu(self.conv2(x)))
+            x = x.view(-1, self.flattened)
+            x = self.dropout(F.relu(self.fc1(x)))
+            x = self.dropout(F.relu(self.fc2(x)))
+            x = self.out(x)
+            return x
+
+    model = TunedCNN()
+    optimizer = Adam(model.parameters(), lr=lr)
+    criterion = nn.CrossEntropyLoss()
+
+    accuracy = train_model(model, optimizer, criterion, train_loader, val_loader, device)
+    return accuracy
+
+# Configuración de entrenamiento
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+study = optuna.create_study(direction='maximize')
+study.optimize(objective, n_trials=20)  # Puedes subir el número de pruebas
+
+# Resultados
+print("Mejores hiperparámetros encontrados:")
+for k, v in study.best_params.items():
+    print(f"{k}: {v}")
