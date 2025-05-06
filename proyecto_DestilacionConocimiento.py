@@ -152,8 +152,7 @@ class CNN_1C(nn.Module):
         x = self.fc2(x)
         return x
 
-
-""## Ajuste de Hiperparametros"""
+"""## Ajuste de Hiperparametros"""
 
 # Función de entrenamiento
 def train_model(model, optimizer, criterion, train_loader, val_loader, device):
@@ -241,3 +240,223 @@ study.optimize(objective, n_trials=20)  # Puedes subir el número de pruebas
 print("Mejores hiperparámetros encontrados:")
 for k, v in study.best_params.items():
     print(f"{k}: {v}")
+
+"""## Arquitectura final"""
+
+# 1. Hiperparámetros optimizados
+best_params = {
+    'conv1_out': 64,
+    'conv2_out': 128,
+    'fc1_out': 256,
+    'fc2_out': 64,
+    'dropout': 0.282,
+    'lr': 8.15e-4,
+    'batch_size': 32
+}
+
+# 2. Creacion de modelo
+class CNN_1C_Optimized(nn.Module):
+    def __init__(self, n_clases):
+        super(CNN_1C_Optimized, self).__init__()
+        self.conv1 = nn.Conv2d(1, best_params['conv1_out'], kernel_size=3, padding=0)
+        self.conv2 = nn.Conv2d(best_params['conv1_out'], best_params['conv2_out'], kernel_size=3, padding=0)
+        self.pool = nn.MaxPool2d(2, 2)
+        self.dropout = nn.Dropout(best_params['dropout'])
+
+        # Nueva función para calcular dimensiones automáticamente
+        self._to_linear = None
+        self._calculate_linear_size()
+
+        self.fc1 = nn.Linear(self._to_linear, best_params['fc1_out'])
+        self.fc2 = nn.Linear(best_params['fc1_out'], best_params['fc2_out'])
+        self.fc3 = nn.Linear(best_params['fc2_out'], n_clases)
+
+    def _calculate_linear_size(self):
+        # Pasa un tensor dummy para calcular las dimensiones
+        dummy_input = torch.zeros(1, 1, 28, 28)
+        dummy_output = self.pool(F.relu(self.conv1(dummy_input)))
+        dummy_output = self.pool(F.relu(self.conv2(dummy_output)))
+        self._to_linear = dummy_output.numel() // dummy_output.size(0)
+
+    def forward(self, x):
+        x = self.pool(F.relu(self.conv1(x)))
+        x = self.pool(F.relu(self.conv2(x)))
+        x = x.view(-1, self._to_linear)  # Usa el tamaño calculado automáticamente
+        x = self.dropout(x)
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        x = self.fc3(x)
+        return x
+
+"""## Preparacion de datos"""
+
+# 4. Preparación del dataset (PathMNIST)
+transform = transforms.Compose([
+    transforms.Grayscale(num_output_channels=1),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.5], std=[0.5])
+])
+
+train_dataset = PathMNIST(split='train', transform=transform, download=True)
+val_dataset = PathMNIST(split='val', transform=transform, download=True)
+test_dataset = PathMNIST(split="test", transform=transform, download=True)
+
+# 5. Creación de DataLoaders optimizados
+train_loader = DataLoader(train_dataset,
+                        batch_size=best_params['batch_size'],
+                        shuffle=True,
+                        pin_memory=True if device.type == 'cuda' else False)
+
+val_loader = DataLoader(val_dataset,
+                        batch_size=best_params['batch_size'],
+                        pin_memory=True if device.type == 'cuda' else False)
+
+test_loader = DataLoader(test_dataset,
+                        batch_size=best_params['batch_size'],
+                        shuffle=False,  # ¡Importante para evaluación!
+                        pin_memory=True if device.type == 'cuda' else False)
+
+"""### Entrenamiento del modelo"""
+
+# 6. Inicialización del modelo y optimizador
+cnn_1c = CNN_1C_Optimized(n_clases=9).to(device)
+optimizer = Adam(cnn_1c.parameters(), lr=best_params['lr'])
+criterion = nn.CrossEntropyLoss()
+
+# 7. Funcion de entrenamiento
+def train_model(model, optimizer, criterion, train_loader, val_loader, device, epochs=10):
+    model.train()
+    for epoch in range(epochs):
+        running_loss = 0.0
+        for images, labels in train_loader:
+            images, labels = images.to(device, non_blocking=True), labels.squeeze().long().to(device, non_blocking=True)
+
+            optimizer.zero_grad()
+            outputs = model(images)
+            loss = criterion(outputs, labels)
+            loss.backward()
+            optimizer.step()
+            running_loss += loss.item()
+
+        # Validación
+        val_acc = evaluate(model, val_loader, device)
+        print(f'Época {epoch+1}/{epochs}, Loss: {running_loss/len(train_loader):.4f}, Val Acc: {val_acc:.2f}%')
+
+# 8. Función de evaluación (val y test)
+def evaluate(model, data_loader, device):
+    model.eval()
+    correct = 0
+    total = 0
+    with torch.no_grad():
+        for images, labels in data_loader:
+            images, labels = images.to(device), labels.squeeze().long().to(device)
+            outputs = model(images)
+            _, predicted = torch.max(outputs.data, 1)
+            total += labels.size(0)
+            correct += (predicted == labels).sum().item()
+    return 100 * correct / total
+
+# 10. Entrenamiento
+print("\nComenzando entrenamiento...")
+train_model(cnn_1c, optimizer, criterion, train_loader, val_loader, device, epochs=10)
+
+# 11. Evaluación final en Test
+test_acc = evaluate(cnn_1c, test_loader, device)
+print(f'\nAccuracy en Test: {test_acc:.2f}%')
+
+# 12. Guardar modelo
+torch.save(cnn_1c.state_dict(), 'modelo_optimizado_gpu.pth')
+print("Modelo guardado correctamente")
+
+"""# Segundo modelo"""
+
+# Transforms (normalización de [0, 255] a [0.0, 1.0])
+transform = transforms.Compose([
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[.5], std=[.5])
+])
+
+# Cargar datasets
+train_dataset = DataClass(split='train', transform=transform, download=True)
+val_dataset = DataClass(split='val', transform=transform, download=True)
+test_dataset = DataClass(split='test', transform=transform, download=True)
+
+# DataLoaders
+train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
+val_loader = DataLoader(val_dataset, batch_size=64, shuffle=False)
+test_loader = DataLoader(test_dataset, batch_size=64, shuffle=False)
+
+"""## Arquitectura propuesta"""
+
+class CNN(nn.Module):
+    def __init__(self, num_classes=9):
+        super(CNN, self).__init__()
+        self.conv_layer = nn.Sequential(
+            nn.Conv2d(3, 32, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.MaxPool2d(2),
+            nn.Conv2d(32, 64, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.MaxPool2d(2)
+        )
+        self.fc_layer = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(64 * 7 * 7, 128),
+            nn.ReLU(),
+            nn.Linear(128, num_classes)
+        )
+
+    def forward(self, x):
+        x = self.conv_layer(x)
+        x = self.fc_layer(x)
+        return x
+
+def evaluate(model, data_loader, x):
+    model.eval()
+    correct = 0
+    total = 0
+    all_preds = []
+    all_labels = []
+    with torch.no_grad():
+        for images, labels in data_loader:
+            images, labels = images.to(device), labels.squeeze().long().to(device)
+            outputs = model(images)
+            _, predicted = torch.max(outputs, 1)
+            total += labels.size(0)
+            correct += (predicted == labels).sum().item()
+            all_preds.extend(predicted.cpu().numpy())
+            all_labels.extend(labels.cpu().numpy())
+    conf_matrix = confusion_matrix(all_labels, all_preds)
+    #print(f"Resultados: {x}")
+    #plt.figure(figsize=(10, 10))
+    #sns.heatmap(conf_matrix, annot=True, fmt='d', cmap='Blues')
+    #plt.xlabel('Predicted')
+    #plt.ylabel('True')
+    #plt.show()
+    print(f"Accuracy: {100 * correct / total:.2f}%")
+
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+for i in range(15):
+  model = CNN(num_classes=9).to(device)
+  criterion = nn.CrossEntropyLoss()
+  optimizer = optim.Adam(model.parameters(), lr=0.001)
+
+  # Entrenamiento simple
+  for epoch in range(10):
+      model.train()
+      running_loss = 0.0
+      for images, labels in train_loader:
+          images, labels = images.to(device), labels.squeeze().long().to(device)
+
+          optimizer.zero_grad()
+          outputs = model(images)
+          loss = criterion(outputs, labels)
+          loss.backward()
+          optimizer.step()
+
+          running_loss += loss.item()
+
+      print(f"Epoch {epoch+1}, Loss: {running_loss/len(train_loader):.4f}")
+  evaluate(model, test_loader, "test")
+  evaluate(model, val_loader, "validation")
